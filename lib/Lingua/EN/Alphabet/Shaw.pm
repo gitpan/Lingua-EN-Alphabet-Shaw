@@ -5,6 +5,7 @@ use strict;
 use warnings;
 use utf8;
 use Lingua::EN::Phoneme;
+our $VERSION = 0.02;
 
 our $lep = new Lingua::EN::Phoneme();
 
@@ -77,6 +78,7 @@ sub transliterate {
 
 1;
 
+=encoding utf-8
 =head1 NAME
 
 Lingua::EN::Alphabet::Shaw - transliterate the Latin to Shavian alphabets
