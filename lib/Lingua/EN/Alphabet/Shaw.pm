@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use utf8;
 use Lingua::EN::Phoneme;
-our $VERSION = 0.02;
+our $VERSION = 0.03;
 
 our $lep = new Lingua::EN::Phoneme();
 
@@ -42,7 +42,7 @@ our %abbreviations =
 	TO  => chr(66641),
 );
 
-sub _transliterate_word {
+sub _transliterate_word_raw {
     my ($word) = @_;
 
     my $abbr = $abbreviations{uc $word};
@@ -50,7 +50,7 @@ sub _transliterate_word {
 
     my @pronunciation = $lep->phoneme($word);
 
-    return uc $word unless @pronunciation;
+    return undef unless @pronunciation;
 
     my $result = '';
 
@@ -66,6 +66,21 @@ sub _transliterate_word {
     }
 
     return $result;
+}
+
+sub _transliterate_word {
+    my ($word) = @_;
+    my $result = _transliterate_word_raw($word);
+    return uc $word unless $result;
+    return $result;
+}
+
+sub transliterate_raw {
+    my ($sentence) = @_;
+
+    $sentence =~ s/([A-Za-z]+)/_transliterate_word_raw($1)/eg;
+
+    return $sentence;
 }
 
 sub transliterate {
@@ -89,9 +104,9 @@ Thomas Thurman <tthurman@gnome.org>
 
 =head1 SYNOPSIS
 
-  use Lingua::EN::Alphabet;
+  use Lingua::EN::Alphabet::Shaw;
 
-  print Lingua::EN::Alphabet::Shavian::transliterate("badger");
+  print Lingua::EN::Alphabet::Shaw::transliterate("badger");
   # prints "𐑚𐑨𐑡𐑻"
 
 =head1 DESCRIPTION
@@ -107,7 +122,7 @@ This module transliterates English text from the Latin alphabet into the
 Shavian alphabet.
 
 𐑞 𐑖𐑪 𐑹 ·𐑖𐑱𐑝𐑾𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑 𐑢𐑭𐑟 𐑒𐑩𐑥𐑦𐑖𐑩𐑯𐑛 𐑚𐑲 𐑞 𐑢𐑦𐑤 𐑝 𐑞 𐑐𐑤𐑱𐑮𐑲𐑑 ·𐑡𐑹𐑡
-·𐑚𐑻𐑯𐑸𐑛 ·𐑖𐑪 𐑦𐑯 𐑞 𐑻𐑤𐑰 1960𐑟 𐑨𐑟 𐑩 𐑮𐑦𐑐𐑤𐑱𐑕𐑥𐑩𐑯𐑑 𐑓𐑹 𐑞 𐑤𐑨𐑑𐑩𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑
+·𐑚𐑻𐑯𐑸𐑛 ·𐑖𐑪 𐑦𐑯 𐑞 𐑻𐑤𐑰 1960𐑟 𐑨𐑟 𐑩 𐑮𐑦𐑐𐑤𐑱𐑕𐑥𐑩𐑯𐑑 𐑓𐑹 𐑞 ·𐑤𐑨𐑑𐑩𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑
 𐑓𐑹 𐑮𐑧𐑐𐑮𐑦𐑟𐑧𐑯𐑑𐑦𐑙 𐑦𐑙𐑜𐑤𐑦𐑖. 𐑦𐑑 𐑦𐑟 𐑛𐑦𐑟𐑲𐑯𐑛 𐑑 𐑣𐑨𐑝 𐑩 𐑢𐑩𐑯-𐑑-𐑢𐑩𐑯 𐑓𐑩𐑯𐑰𐑥𐑦𐑒 (𐑯𐑭𐑑
 𐑓𐑩𐑯𐑧𐑑𐑦𐑒) 𐑥𐑨𐑐𐑦𐑙 𐑢𐑦𐑞 𐑞 𐑕𐑬𐑯𐑛𐑟 𐑝 𐑦𐑙𐑜𐑤𐑦𐑖.
 
@@ -125,6 +140,12 @@ If the word is not in the dictionary, returns $latin in uppercase.
 
 𐑮𐑦𐑑𐑻𐑯𐑟 𐑞 𐑑𐑮𐑨𐑯𐑟𐑤𐑦𐑑𐑻𐑱𐑠𐑩𐑯 𐑝 𐑞 𐑜𐑦𐑝𐑩𐑯 𐑢𐑻𐑛 𐑦𐑯𐑑𐑵 𐑞 ·𐑖𐑱𐑝𐑾𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑. 𐑦𐑓 𐑞 𐑢𐑻𐑛
 𐑦𐑟 𐑯𐑭𐑑 𐑦𐑯 𐑞 𐑛𐑦𐑒𐑖𐑩𐑯𐑺𐑰, 𐑮𐑦𐑑𐑻𐑯𐑟 $latin 𐑦𐑯 𐑩𐑐𐑻𐑒𐑱𐑕. 
+
+=head2 transliterate_raw($latin)
+
+Similar, but returns undef for unknown words.
+
+𐑕𐑦𐑥𐑩𐑤𐑻, 𐑚𐑩𐑑 𐑮𐑦𐑑𐑻𐑯𐑟 undef 𐑓𐑹 𐑩𐑯𐑯𐑴𐑯 𐑢𐑻𐑛𐑟.
 
 =head1 FONTS
 
@@ -146,6 +167,10 @@ reason, a few of the Shavian vowels cannot ever be produced: Shavian simply
 makes some vowel distinctions which cmudict does not.  If you think some
 of the mappings I have made are incorrect, please let me know.
 
+In particular the words "father" and "bother" are considered by cmudict
+to have the same vowel, as are the words "cot" and "caught".  Suggestions
+of a British English pronouncing dictionary are welcomed.
+
 The naming dot is not yet supported.
 
 𐑞 𐑛𐑦𐑒𐑖𐑩𐑯𐑺𐑰 𐑦𐑟 𐑒𐑢𐑲𐑑 𐑕𐑥𐑪𐑤.
@@ -156,6 +181,10 @@ The naming dot is not yet supported.
 𐑕𐑩𐑥 𐑝𐑬𐑩𐑤 𐑛𐑦𐑕𐑑𐑦𐑙𐑒𐑖𐑩𐑯𐑟 𐑢𐑦𐑗 cmudict 𐑛𐑩𐑟 𐑯𐑭𐑑. 𐑦𐑓 𐑿 𐑔𐑦𐑙𐑒 𐑕𐑩𐑥 𐑝 𐑞
 𐑥𐑨𐑐𐑦𐑙𐑟  𐑲 𐑣𐑨𐑝 𐑥𐑱𐑛 𐑸 𐑦𐑯𐑒𐑻𐑧𐑒𐑑, 𐑐𐑤𐑰𐑟 𐑤𐑧𐑑 𐑥𐑰 𐑯𐑴.
 
+𐑦𐑯 𐑐𐑻𐑑𐑦𐑒𐑘𐑩𐑤𐑻 𐑞 𐑢𐑻𐑛𐑟 "FATHER" 𐑯 "BOTHER" 𐑸 𐑒𐑩𐑯𐑕𐑦𐑛𐑻𐑛 𐑚𐑲 cmudict
+𐑑 𐑣𐑨𐑝 𐑞 𐑕𐑱𐑥 𐑝𐑬𐑩𐑤, 𐑨𐑟 𐑸 𐑞 𐑢𐑻𐑛𐑟 "COT" 𐑯 "CAUGHT". 𐑕𐑩𐑜𐑡𐑧𐑕𐑗𐑩𐑯𐑟
+𐑝 𐑩 ·𐑚𐑮𐑦𐑑𐑦𐑖 𐑦𐑙𐑜𐑤𐑦𐑖 𐑐𐑮𐑩𐑯𐑬𐑯𐑕𐑦𐑙 𐑛𐑦𐑒𐑖𐑩𐑯𐑺𐑰 𐑸 𐑢𐑧𐑤𐑒𐑩𐑥𐑛.
+
 𐑞 𐑯𐑱𐑥𐑦𐑙 𐑛𐑭𐑑 𐑦𐑟 𐑯𐑭𐑑 𐑘𐑧𐑑 𐑕𐑩𐑐𐑹𐑑𐑩𐑛. 
 
 =head1 COPYRIGHT
@@ -164,5 +193,5 @@ This Perl module is copyright (C) Thomas Thurman, 2009.
 This is free software, and can be used/modified under the same terms as
 Perl itself.
 
-𐑞𐑦𐑕 𐑐𐑻𐑤 𐑥𐑭𐑡𐑵𐑤 𐑦𐑟 𐑒𐑭𐑐𐑰𐑮𐑲𐑑 (C) 𐑑𐑭𐑥𐑩𐑕 𐑔𐑻𐑥𐑩𐑯, 2009.
+𐑞𐑦𐑕 𐑐𐑻𐑤 𐑥𐑭𐑡𐑵𐑤 𐑦𐑟 𐑒𐑭𐑐𐑰𐑮𐑲𐑑 (C) ·𐑑𐑭𐑥𐑩𐑕 ·𐑔𐑻𐑥𐑩𐑯, 2009.
 𐑞𐑦𐑕 𐑦𐑟 𐑓𐑮𐑰 𐑕𐑪𐑓𐑑𐑢𐑺, 𐑯 𐑒𐑨𐑯 𐑚𐑰 𐑿𐑟𐑛/𐑥𐑭𐑛𐑩𐑓𐑲𐑛 𐑩𐑯𐑛𐑻 𐑞 𐑕𐑱𐑥 𐑑𐑻𐑥𐑟 𐑨𐑟 𐑐𐑻𐑤 𐑦𐑑𐑕𐑧𐑤𐑓. 

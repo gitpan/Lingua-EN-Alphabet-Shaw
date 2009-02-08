@@ -18,4 +18,4 @@ requires:
   perl: 5.005
 resources:
   license: http://dev.perl.org/licenses/
-version: undef
+version: 0.02
