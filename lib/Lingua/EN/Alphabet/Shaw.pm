@@ -7,7 +7,7 @@ use DBI;
 use Encode;
 use File::ShareDir qw(dist_file);
 
-our $VERSION = 0.03;
+our $VERSION = 0.51;
 
 sub new {
     my ($class) = @_;
