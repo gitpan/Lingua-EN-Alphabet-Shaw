@@ -3,97 +3,101 @@ package Lingua::EN::Alphabet::Shaw;
 use 5.005;
 use strict;
 use warnings;
-use utf8;
-use Lingua::EN::Phoneme;
+use DBI;
+use Encode;
+use File::ShareDir qw(dist_file);
+
 our $VERSION = 0.03;
 
-our $lep = new Lingua::EN::Phoneme();
-
-my $i=66640;
-our %correspondence = map { $_ => $i++ } qw(
-P T K F TH S SH CH Y NG B D G V DH Z ZH JH W HH L M
-IH EH AE AH AO UH AW AA R N IY EY AY _up OW UW OY _awe
-_are _or _air ER _array
-);
-
-# Fixups for the above:
-%correspondence = (%correspondence,
-		   IH => 66662,
-    );
-
-$i = 66680;
-our %ligatures = map { chr($_->[0]).chr($_->[1]) => chr($i++) }
-(
- [ 66669, 66670 ], # are
- [ 66666, 66670 ], # or
- [ 66663, 66670 ], # air
- [ 66675, 66670 ], # err
- [ 66665, 66670 ], # array
- [ 66662, 66670 ], # ear
- [ 66662, 66665 ], # ian
- [ 66648, 66677 ], # yew
-);
-
-our %abbreviations =
-(
-	AND => chr(66671),
-	OF  => chr(66653),
-	THE => chr(66654),
-	TO  => chr(66641),
-);
-
-sub _transliterate_word_raw {
-    my ($word) = @_;
-
-    my $abbr = $abbreviations{uc $word};
-    return $abbr if $abbr;
-
-    my @pronunciation = $lep->phoneme($word);
-
-    return undef unless @pronunciation;
-
-    my $result = '';
-
-    for (@pronunciation) {
-	s/[0-9]//g; # don't care about stress
-	warn "CMU phoneset $_ does not appear in correspondence"
-	    unless $correspondence{$_};
-	$result .= chr($correspondence{$_});
-    }
-    
-    for (keys %ligatures) {
-    	$result =~ s/$_/$ligatures{$_}/g;
-    }
-
-    return $result;
-}
-
-sub _transliterate_word {
-    my ($word) = @_;
-    my $result = _transliterate_word_raw($word);
-    return uc $word unless $result;
-    return $result;
-}
-
-sub transliterate_raw {
-    my ($sentence) = @_;
-
-    $sentence =~ s/([A-Za-z]+)/_transliterate_word_raw($1)/eg;
-
-    return $sentence;
+sub new {
+    my ($class) = @_;
+    my $self = {
+	dbh => undef,
+	sth => undef,
+	map => undef,
+    };
+    return bless($self, $class);
 }
 
 sub transliterate {
-    my ($sentence) = @_;
+    my ($self, $text) = @_;
 
-    $sentence =~ s/([A-Za-z]+)/_transliterate_word($1)/eg;
+    unless (defined $self->{dbh}) {
+	my $filename;
 
-    return $sentence;
+	# allow a local override
+	$filename = glob('~/.cache/shavian/shavian-set.sqlite');
+	$filename = dist_file('Lingua-EN-Alphabet-Shaw', 'shavian-set.sqlite') unless -e $filename;
+
+	$self->{dbh} = DBI->connect("dbi:SQLite:dbname=$filename","","");
+	$self->{sth} = $self->{dbh}->prepare('select shaw, pos, dab from words where latn=?');
+    }
+
+    my $prevpos = 'n'; # sensible default
+
+    my $lookup_word = sub {
+	my ($word) = @_;
+
+	$self->{sth}->execute(lc $word);
+	my $homonyms = $self->{sth}->fetchall_arrayref();
+	return $word unless @$homonyms;
+	my $candidate = $homonyms->[0];
+	for (@$homonyms) {
+	    $candidate = $_ if $_->[2] =~ $prevpos;
+	    $candidate = $_ if $_->[2] eq 'g' && $word =~ /^[A-Z]/;
+	    $candidate = $_ if $_->[2] eq 'h' && $word =~ /^[a-z]/;
+	}
+
+	$prevpos = $candidate->[1];
+	return decode_utf8($candidate->[0]);
+    };
+
+    $text =~ s/(?<!%)(?<!\\)\b([a-z]|[a-z][a-z']*[a-z])\b/$lookup_word->($1)/ieg;
+
+    return $text;
+}
+
+sub mapping {
+
+    my ($self, $text) = @_;
+
+    unless (defined $self->{map}) {
+	$self->{map} = {};
+	my $codepoint = 66640;
+	for (qw(p t k f T s S c j N b d g v H z
+                Z J w h l m i e A a o U Q y r n
+                I E F u O M q Y R P X x D C W V)) {
+	    $self->{map}->{chr($codepoint)} = $_;
+	    $self->{map}->{$_} = chr($codepoint);
+	    $codepoint++;
+	}
+
+	my $naming_dot = chr(0xB7);
+	$self->{map}->{$naming_dot} = 'G';
+	$self->{map}->{'G'} = $naming_dot;
+	$self->{map}->{'B'} = $naming_dot;
+	# some standards also map it to the solidus
+	# but that will stop this function being
+	# its own inverse
+    }
+
+    my $remap = sub {
+	my ($char) = @_;
+	return $self->{map}->{$char} if defined $self->{map}->{$char};
+	return $char;
+    };
+
+    $text =~ s/(.)/$remap->($1)/ge;
+    return $text;
+}
+
+sub DESTROY {
+    my ($self) = @_;
+
+    $self->{sth}->finish() if defined $self->{sth};
 }
 
 1;
-
-=encoding utf-8
 =head1 NAME
 
 Lingua::EN::Alphabet::Shaw - transliterate the Latin to Shavian alphabets
@@ -106,8 +110,8 @@ Thomas Thurman <tthurman@gnome.org>
 
   use Lingua::EN::Alphabet::Shaw;
 
-  print Lingua::EN::Alphabet::Shaw::transliterate("badger");
-  # prints "𐑚𐑨𐑡𐑻"
+  my $shaw = Lingua::EN::Alphabet::Shaw->new();
+  print $shaw->transliterate('I live near a live wire.');
 
 =head1 DESCRIPTION
 
@@ -121,31 +125,41 @@ Its ISO 15924 code is "Shaw" 281.
 This module transliterates English text from the Latin alphabet into the
 Shavian alphabet.
 
-𐑞 𐑖𐑪 𐑹 ·𐑖𐑱𐑝𐑾𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑 𐑢𐑭𐑟 𐑒𐑩𐑥𐑦𐑖𐑩𐑯𐑛 𐑚𐑲 𐑞 𐑢𐑦𐑤 𐑝 𐑞 𐑐𐑤𐑱𐑮𐑲𐑑 ·𐑡𐑹𐑡
-·𐑚𐑻𐑯𐑸𐑛 ·𐑖𐑪 𐑦𐑯 𐑞 𐑻𐑤𐑰 1960𐑟 𐑨𐑟 𐑩 𐑮𐑦𐑐𐑤𐑱𐑕𐑥𐑩𐑯𐑑 𐑓𐑹 𐑞 ·𐑤𐑨𐑑𐑩𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑
-𐑓𐑹 𐑮𐑧𐑐𐑮𐑦𐑟𐑧𐑯𐑑𐑦𐑙 𐑦𐑙𐑜𐑤𐑦𐑖. 𐑦𐑑 𐑦𐑟 𐑛𐑦𐑟𐑲𐑯𐑛 𐑑 𐑣𐑨𐑝 𐑩 𐑢𐑩𐑯-𐑑-𐑢𐑩𐑯 𐑓𐑩𐑯𐑰𐑥𐑦𐑒 (𐑯𐑭𐑑
-𐑓𐑩𐑯𐑧𐑑𐑦𐑒) 𐑥𐑨𐑐𐑦𐑙 𐑢𐑦𐑞 𐑞 𐑕𐑬𐑯𐑛𐑟 𐑝 𐑦𐑙𐑜𐑤𐑦𐑖.
+The API has changed since version 0.03 to be object-based.
 
-𐑦𐑑𐑕 ISO 15924 𐑒𐑴𐑛 𐑦𐑟 "Shaw" 281.
-
-𐑞𐑦𐑕 𐑥𐑭𐑡𐑵𐑤 𐑑𐑮𐑨𐑯𐑟𐑤𐑦𐑑𐑻𐑱𐑑𐑕 𐑦𐑙𐑜𐑤𐑦𐑖 𐑑𐑧𐑒𐑕𐑑 𐑓𐑮𐑩𐑥 𐑞 𐑤𐑨𐑑𐑩𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑 𐑦𐑯𐑑𐑵 𐑞
-·𐑖𐑱𐑝𐑾𐑯  𐑨𐑤𐑓𐑩𐑚𐑧𐑑.
+If you find an error in the translation database, you can change it
+yourself at http://shavian.org.uk/wiki/ .  If you want to override the
+database shipped with this module, place the new copy at
+~/.shavian/shavian-set.sqlite and it will be used in preference.
 
 =head1 METHODS
 
-=head2 transliterate($latin)
+=head2 Lingua::EN::Alphabet::Shaw->new()
 
-Returns the transliteration of the given word into the Shavian alphabet.
-If the word is not in the dictionary, returns $latin in uppercase.
+Constructor.  Currently takes no arguments.
 
-𐑮𐑦𐑑𐑻𐑯𐑟 𐑞 𐑑𐑮𐑨𐑯𐑟𐑤𐑦𐑑𐑻𐑱𐑠𐑩𐑯 𐑝 𐑞 𐑜𐑦𐑝𐑩𐑯 𐑢𐑻𐑛 𐑦𐑯𐑑𐑵 𐑞 ·𐑖𐑱𐑝𐑾𐑯 𐑨𐑤𐑓𐑩𐑚𐑧𐑑. 𐑦𐑓 𐑞 𐑢𐑻𐑛
-𐑦𐑟 𐑯𐑭𐑑 𐑦𐑯 𐑞 𐑛𐑦𐑒𐑖𐑩𐑯𐑺𐑰, 𐑮𐑦𐑑𐑻𐑯𐑟 $latin 𐑦𐑯 𐑩𐑐𐑻𐑒𐑱𐑕. 
+=head2 $shaw->transliterate($phrase)
 
-=head2 transliterate_raw($latin)
+Returns the transliteration of the given phrase into the Shavian alphabet.
+Can handle multi-word phrases.  Does a reasonable job resolving homonym
+ambiguity ("does he like does?").
 
-Similar, but returns undef for unknown words.
+=head2 $shaw->mapping($phrase)
 
-𐑕𐑦𐑥𐑩𐑤𐑻, 𐑚𐑩𐑑 𐑮𐑦𐑑𐑻𐑯𐑟 undef 𐑓𐑹 𐑩𐑯𐑯𐑴𐑯 𐑢𐑻𐑛𐑟.
+There is a quasi-standard mapping of the Latin alphabet onto the Shavian
+alphabet.  This method maps Shavian text into Latin and vice versa.
+It does not transliterate.  Think of this as a kind of ASCII-armouring.
+
+=head1 BUGS
+
+It should probably be possible to transliterate from Shavian to the
+conventional alphabet.
+
+It should be possible to handle other alternative scripts, such as
+Deseret and Tengwar.
+
+The portion of the database which is taken from CMUdict exhibits
+unhelpful mergers (notably father/bother).
 
 =head1 FONTS
 
@@ -153,45 +167,97 @@ You will need a Shavian Unicode font to use this module.
 There are several such fonts at http://marnanel.org/shavian/fonts/ .
 Please be sure to get a Unicode font and not one with the "Latin mapping".
 
-𐑿 𐑢𐑦𐑤 𐑯𐑰𐑛 𐑩 ·𐑖𐑱𐑝𐑾𐑯 ·𐑿𐑯𐑰𐑒𐑴𐑛 𐑓𐑭𐑯𐑑 𐑑 𐑿𐑕 𐑞𐑦𐑕 𐑥𐑭𐑡𐑵𐑤.
-𐑞𐑺 𐑸 𐑕𐑧𐑝𐑮𐑩𐑤 𐑕𐑩𐑗 𐑓𐑭𐑯𐑑𐑕 𐑨𐑑 http://marnanel.org/shavian/fonts/ .
-𐑐𐑤𐑰𐑟 𐑚𐑰 𐑖𐑫𐑮 𐑑 𐑜𐑧𐑑 𐑩 ·𐑿𐑯𐑰𐑒𐑴𐑛 𐑓𐑭𐑯𐑑 𐑯 𐑯𐑭𐑑 𐑢𐑩𐑯 𐑢𐑦𐑞 𐑞 "·𐑤𐑨𐑑𐑩𐑯 𐑥𐑨𐑐𐑦𐑙". 
-
-=head1 BUGS
-
-The dictionary is quite small.
-
-The vowels don't match exactly to those used in "Androcles and the Lion",
-since they are restricted by the vowel set used in cmudict.  For the same
-reason, a few of the Shavian vowels cannot ever be produced: Shavian simply
-makes some vowel distinctions which cmudict does not.  If you think some
-of the mappings I have made are incorrect, please let me know.
-
-In particular the words "father" and "bother" are considered by cmudict
-to have the same vowel, as are the words "cot" and "caught".  Suggestions
-of a British English pronouncing dictionary are welcomed.
-
-The naming dot is not yet supported.
-
-𐑞 𐑛𐑦𐑒𐑖𐑩𐑯𐑺𐑰 𐑦𐑟 𐑒𐑢𐑲𐑑 𐑕𐑥𐑪𐑤.
-
-𐑞 𐑝𐑬𐑩𐑤𐑟 𐑛𐑴𐑯'𐑑 𐑥𐑨𐑗 𐑦𐑜𐑟𐑨𐑒𐑑𐑤𐑰 𐑑 𐑞𐑴𐑟 𐑿𐑟𐑛 𐑦𐑯 "·𐑨𐑯𐑛𐑮𐑩𐑒𐑤𐑰𐑟 𐑯 𐑞 𐑤𐑲𐑩𐑯",
-𐑕𐑦𐑯𐑕 𐑞𐑱 𐑸 𐑮𐑰𐑕𐑑𐑮𐑦𐑒𐑑𐑩𐑛 𐑚𐑲 𐑞 𐑝𐑬𐑩𐑤 𐑕𐑧𐑑 𐑿𐑟𐑛 𐑦𐑯 cmudict. 𐑓𐑹 𐑞 𐑕𐑱𐑥 𐑮𐑰𐑟𐑩𐑯,
-𐑩 𐑓𐑿 𐑝 𐑞 ·𐑖𐑱𐑝𐑾𐑯 𐑝𐑬𐑩𐑤𐑟 𐑒𐑨𐑯𐑭𐑑 𐑧𐑝𐑻 𐑚𐑰 𐑐𐑮𐑩𐑛𐑵𐑕𐑑: ·𐑖𐑱𐑝𐑾𐑯 𐑕𐑦𐑥𐑐𐑤𐑰 𐑥𐑱𐑒𐑕
-𐑕𐑩𐑥 𐑝𐑬𐑩𐑤 𐑛𐑦𐑕𐑑𐑦𐑙𐑒𐑖𐑩𐑯𐑟 𐑢𐑦𐑗 cmudict 𐑛𐑩𐑟 𐑯𐑭𐑑. 𐑦𐑓 𐑿 𐑔𐑦𐑙𐑒 𐑕𐑩𐑥 𐑝 𐑞
-𐑥𐑨𐑐𐑦𐑙𐑟  𐑲 𐑣𐑨𐑝 𐑥𐑱𐑛 𐑸 𐑦𐑯𐑒𐑻𐑧𐑒𐑑, 𐑐𐑤𐑰𐑟 𐑤𐑧𐑑 𐑥𐑰 𐑯𐑴.
-
-𐑦𐑯 𐑐𐑻𐑑𐑦𐑒𐑘𐑩𐑤𐑻 𐑞 𐑢𐑻𐑛𐑟 "FATHER" 𐑯 "BOTHER" 𐑸 𐑒𐑩𐑯𐑕𐑦𐑛𐑻𐑛 𐑚𐑲 cmudict
-𐑑 𐑣𐑨𐑝 𐑞 𐑕𐑱𐑥 𐑝𐑬𐑩𐑤, 𐑨𐑟 𐑸 𐑞 𐑢𐑻𐑛𐑟 "COT" 𐑯 "CAUGHT". 𐑕𐑩𐑜𐑡𐑧𐑕𐑗𐑩𐑯𐑟
-𐑝 𐑩 ·𐑚𐑮𐑦𐑑𐑦𐑖 𐑦𐑙𐑜𐑤𐑦𐑖 𐑐𐑮𐑩𐑯𐑬𐑯𐑕𐑦𐑙 𐑛𐑦𐑒𐑖𐑩𐑯𐑺𐑰 𐑸 𐑢𐑧𐑤𐑒𐑩𐑥𐑛.
-
-𐑞 𐑯𐑱𐑥𐑦𐑙 𐑛𐑭𐑑 𐑦𐑟 𐑯𐑭𐑑 𐑘𐑧𐑑 𐑕𐑩𐑐𐑹𐑑𐑩𐑛. 
+However, the Mac can handle the Shavian alphabet out of the box.
 
 =head1 COPYRIGHT
 
-This Perl module is copyright (C) Thomas Thurman, 2009.
+This Perl module is copyright (C) Thomas Thurman, 2009-2010.
 This is free software, and can be used/modified under the same terms as
 Perl itself.
 
-𐑞𐑦𐑕 𐑐𐑻𐑤 𐑥𐑭𐑡𐑵𐑤 𐑦𐑟 𐑒𐑭𐑐𐑰𐑮𐑲𐑑 (C) ·𐑑𐑭𐑥𐑩𐑕 ·𐑔𐑻𐑥𐑩𐑯, 2009.
-𐑞𐑦𐑕 𐑦𐑟 𐑓𐑮𐑰 𐑕𐑪𐑓𐑑𐑢𐑺, 𐑯 𐑒𐑨𐑯 𐑚𐑰 𐑿𐑟𐑛/𐑥𐑭𐑛𐑩𐑓𐑲𐑛 𐑩𐑯𐑛𐑻 𐑞 𐑕𐑱𐑥 𐑑𐑻𐑥𐑟 𐑨𐑟 𐑐𐑻𐑤 𐑦𐑑𐑕𐑧𐑤𐑓. 
+The transliteration data is available under various free licences,
+which are reproduced below.
+
+=head1 LICENCES
+
+=head2 Shavian Wiki
+
+Part of the transliteration data was taken from the Shavian Wiki, and
+this is available under the Creative Commons cc-by-sa licence.
+
+=head2 CMUdict
+
+Another part of the transliteration data was taken from CMUdict.  Its
+licence is reproduced below.
+
+Copyright (C) 1993-2008 Carnegie Mellon University. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+   The contents of this file are deemed to be source code.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in
+   the documentation and/or other materials provided with the
+   distribution.
+
+This work was supported in part by funding from the Defense Advanced
+Research Projects Agency, the Office of Naval Research and the National
+Science Foundation of the United States of America, and by member
+companies of the Carnegie Mellon Sphinx Speech Consortium. We acknowledge
+the contributions of many volunteers to the expansion and improvement of
+this dictionary.
+
+THIS SOFTWARE IS PROVIDED BY CARNEGIE MELLON UNIVERSITY ``AS IS'' AND
+ANY EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL CARNEGIE MELLON UNIVERSITY
+NOR ITS EMPLOYEES BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+=head2 Brown tagger
+
+The part-of-speech data was taken from the Brown tagger (although the
+tagger built into this model is not the Brown tagger, so its first
+sentence is inaccurate).  Its licence is also reproduced below:
+
+This software was written by Eric Brill.
+
+This software is being provided to you, the LICENSEE, by the 
+Massachusetts Institute of Technology (M.I.T.) under the following 
+license.  By obtaining, using and/or copying this software, you agree 
+that you have read, understood, and will comply with these terms and 
+conditions:  
+
+Permission to [use, copy, modify and distribute, including the right to 
+grant others rights to distribute at any tier, this software and its 
+documentation for any purpose and without fee or royalty] is hereby 
+granted, provided that you agree to comply with the following copyright 
+notice and statements, including the disclaimer, and that the same 
+appear on ALL copies of the software and documentation, including 
+modifications that you make for internal use or for distribution:
+
+Copyright 1993 by the Massachusetts Institute of Technology and the
+University of Pennsylvania.  All rights reserved.  
+
+THIS SOFTWARE IS PROVIDED "AS IS", AND M.I.T. MAKES NO REPRESENTATIONS 
+OR WARRANTIES, EXPRESS OR IMPLIED.  By way of example, but not 
+limitation, M.I.T. MAKES NO REPRESENTATIONS OR WARRANTIES OF 
+MERCHANTABILITY OR FITNESS FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF 
+THE LICENSED SOFTWARE OR DOCUMENTATION WILL NOT INFRINGE ANY THIRD PARTY 
+PATENTS, COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS.   
+
+The name of the Massachusetts Institute of Technology or M.I.T. may NOT 
+be used in advertising or publicity pertaining to distribution of the 
+software.  Title to copyright in this software and any associated 
+documentation shall at all times remain with M.I.T., and USER agrees to 
+preserve same.  
