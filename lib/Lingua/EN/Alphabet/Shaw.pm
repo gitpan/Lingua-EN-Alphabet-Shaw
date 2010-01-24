@@ -7,7 +7,7 @@ use DBI;
 use Encode;
 use File::ShareDir qw(dist_file);
 
-our $VERSION = 0.51;
+our $VERSION = 0.52;
 
 sub new {
     my ($class) = @_;
@@ -128,9 +128,11 @@ Shavian alphabet.
 The API has changed since version 0.03 to be object-based.
 
 If you find an error in the translation database, you can change it
-yourself at http://shavian.org.uk/wiki/ .  If you want to override the
-database shipped with this module, place the new copy at
-~/.shavian/shavian-set.sqlite and it will be used in preference.
+yourself at http://shavian.org.uk/wiki/ .  You may download a current
+copy of the dataset at http://shavian.org.uk/set/ .
+If you want to override the database shipped with this module,
+place the new copy at ~/.cache/shavian/shavian-set.sqlite and it will
+be used in preference.
 
 =head1 METHODS
 
