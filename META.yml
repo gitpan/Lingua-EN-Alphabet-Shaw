@@ -18,9 +18,11 @@ no_index:
     - inc
     - t
 requires:
+  DBD::SQLite: 0
   DBI: 0
   File::ShareDir: 0
+  HTML::Parser: 0
   perl: 5.005
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.52
+version: 0.6

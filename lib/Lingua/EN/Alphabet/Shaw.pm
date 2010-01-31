@@ -6,8 +6,9 @@ use warnings;
 use DBI;
 use Encode;
 use File::ShareDir qw(dist_file);
+use HTML::Parser;
 
-our $VERSION = 0.52;
+our $VERSION = 0.60;
 
 sub new {
     my ($class) = @_;
@@ -15,12 +16,22 @@ sub new {
 	dbh => undef,
 	sth => undef,
 	map => undef,
+	# default behaviour for "unknown" is to return its argument
+	unknown => sub { $_[0]; },
     };
     return bless($self, $class);
 }
 
+sub unknown_handler {
+    my ($self, $handler) = @_;
+
+    $self->{unknown} = $handler if defined $handler;
+
+    return $self->{unknown};
+}
+
 sub transliterate {
-    my ($self, $text) = @_;
+    my ($self, @texts) = @_;
 
     unless (defined $self->{dbh}) {
 	my $filename;
@@ -40,7 +51,7 @@ sub transliterate {
 
 	$self->{sth}->execute(lc $word);
 	my $homonyms = $self->{sth}->fetchall_arrayref();
-	return $word unless @$homonyms;
+	return $self->{'unknown'}->($word, $word) unless @$homonyms;
 	my $candidate = $homonyms->[0];
 	for (@$homonyms) {
 	    $candidate = $_ if $_->[2] =~ $prevpos;
@@ -52,9 +63,17 @@ sub transliterate {
 	return decode_utf8($candidate->[0]);
     };
 
-    $text =~ s/(?<!%)(?<!\\)\b([a-z]|[a-z][a-z']*[a-z])\b/$lookup_word->($1)/ieg;
+    my $result = '';
 
-    return $text;
+    while (@texts) {
+	my $text = shift @texts;
+	$text =~ s/(?<!%)(?<!\\)\b([a-z]|[a-z][a-z']*[a-z])\b/$lookup_word->($1)/ieg;
+	$result .= $text;
+
+	$result .= shift @texts if @texts;
+    }
+
+    return $result;
 }
 
 sub mapping {
@@ -89,6 +108,100 @@ sub mapping {
 
     $text =~ s/(.)/$remap->($1)/ge;
     return $text;
+}
+
+sub normalise {
+    my ($self, $shaw) = @_;
+
+    my %mappings = (
+	chr(66664).chr(66670) => chr(66680), # ash + roar = are
+	chr(66666).chr(66670) => chr(66681), # on + roar = or
+	chr(66663).chr(66670) => chr(66682), # egg + roar = air
+	chr(66675).chr(66670) => chr(66683), # up + roar = err
+	chr(66665).chr(66670) => chr(66684), # ado + roar = array
+	chr(66662).chr(66670) => chr(66685), # if + roar = ear
+	chr(66662).chr(66665) => chr(66686), # if + ado = ian
+	chr(66648).chr(66677) => chr(66687), # yea + ooze = yew
+	);
+
+    for (keys %mappings) {
+	$shaw =~ s/$_/$mappings{$_}/g;
+    }
+
+    return $shaw;
+}
+
+sub transliterate_html {
+    my ($self, $html) = @_;
+
+    my @content;
+    my $result;
+
+    my %toplevel_tags = map {$_=>1} qw(p div h1 h2 h3 h4 h5 h6 ul ol li dt dd dl title);
+    my %text_attrs = map {$_=>1} qw(alt title);
+
+    my $output = sub {
+	my ($repr, $tag) = @_;
+
+	if (!$tag || $toplevel_tags{$tag}) {
+	    my $want_tag = 0;
+	    my @ordered = ('');
+	    for (@content) {
+		my $is_tag = /^</;
+		if ($want_tag != $is_tag) {
+		    push @ordered, '';
+		    $want_tag = $is_tag;
+		}
+		$ordered[-1] .= $_;
+	    }
+	    $result .= $self->transliterate(@ordered);
+	    @content = ();
+	    $result .= $repr;
+	} else {
+	    push @content, $repr;
+	}
+    };
+
+    my $p = HTML::Parser->new( api_version => 3,
+			       handlers => {
+				   text => [sub {
+				       my ($text) = @_;
+				       push @content, $text;
+					    }, 'text'],
+				   start => [sub {
+				       my ($tag, $attrs) = @_;
+				       my $repr = "<$tag";
+				       for my $attr (sort keys %$attrs) {
+					   next if $attr eq '/';
+					   my $value = $attrs->{$attr};
+					   $value = $self->transliterate($value)
+					       if $text_attrs{$attr};
+					   $repr .= " $attr=\"$value\"";
+				       }
+				       $repr .= '/' if $attrs->{'/'};
+				       $repr .= '>';
+
+				       $output->($repr, $tag);
+					     }, 'tagname, attr'],
+				   end => [sub {
+				       my ($tag) = @_;
+				       my $repr .= "</$tag>";
+
+				       $output->($repr, $tag);
+					   }, 'tagname'],
+				   comment => [sub {
+				       my ($text) = @_;
+				       push @content, $text;
+					       }, 'text'],
+			       },
+			       marked_sections => 1,
+	);
+
+    $p->parse($html);
+    $p->eof();
+    $output->('');
+
+    return $result;
 }
 
 sub DESTROY {
@@ -146,22 +259,113 @@ Returns the transliteration of the given phrase into the Shavian alphabet.
 Can handle multi-word phrases.  Does a reasonable job resolving homonym
 ambiguity ("does he like does?").
 
+If you pass multiple arguments, the results will be concatenated, and only the
+odd-numbered arguments will be transliterated.  The state of homonym
+resolution is maintained.  This allows you to embed chunks of text
+which should not be transliterated into the line, such as XML tags.
+
+=head2 $shaw->unknown_handler([$handler])
+
+If a word is not found in the translation database, the transliteration
+routines will call a particular handler to find out what to do, with the
+unknown word as both its first and second arguments.  (This is to allow
+later expansion; see BUGS AND ISSUES, below.)
+The result of the handler should be
+a string, which will be inserted into the result of the transliteration
+routine at the correct place.
+
+This method allows you to set a new handler by passing it as an argument.
+If you pass no argument, this method returns the current handler.
+
+The default handler only returns its argument.  A replacement handler could,
+for example, make an attempt at guessing the transliteration; it could die,
+to abort the transliteration process; it could return its argument but
+also store the new value in a table so that a list of missing words could
+later be reported to the user.
+
 =head2 $shaw->mapping($phrase)
 
-There is a quasi-standard mapping of the Latin alphabet onto the Shavian
-alphabet.  This method maps Shavian text into Latin and vice versa.
-It does not transliterate.  Think of this as a kind of ASCII-armouring.
+There is a quasi-standard mapping of the conventional alphabet onto the Shavian
+alphabet.  This method maps Shavian text into the conventional alphabet
+and vice versa. It does not transliterate.
+Think of this as a kind of ASCII-armouring.
 
-=head1 BUGS
+Various versions of the standard map the naming dot to "G", "B", and "/".
+This method does not support "/", but maps both "G" and "B" to the naming
+dot; in reverse, it maps the naming dot to "G".
 
-It should probably be possible to transliterate from Shavian to the
-conventional alphabet.
+The letters "K" and "L" have no mapping to Shavian letters, and are
+left alone.
+
+=head2 $shaw->normalise($shavian_text)
+
+Certain letters in the Shavian alphabet are ligatures of pairs of
+other letters: because of this, these pairs should not exist separately.
+(For example, the letter YEW is a ligature of YEA and OOZE.) This method
+replaces these pairs with their ligature equivalents.
+
+=head2 $shaw->transliterate_html($html)
+
+Given a block of text in the conventional alphabet which is formatted
+as HTML, this will make a reasonable attempt at returning the same text
+transliterated into the Shavian alphabet.  It is aware of which tags
+commonly break the flow of sentences, and handles homonym resolution
+accordingly.
+
+=head1 BUGS AND ISSUES
+
+There should be a version of the main transliteration method which
+returned a list of hashes, each of which gave the source and
+destination forms of a word, part of speech and disambiguation
+information, and a marking of the source (CMUDict or
+Shavian Wiki).
+
+It should probably be possible to transliterate in reverse,
+from Shavian to the conventional alphabet.
 
 It should be possible to handle other alternative scripts, such as
-Deseret and Tengwar.
+Deseret and Tengwar.  This shouldn't be very difficult.
+It would also allow representation in the IPA, which would mean
+this module could be used for simple text-to-speech processing.
 
 The portion of the database which is taken from CMUdict exhibits
-unhelpful mergers (notably father/bother).
+unhelpful mergers (notably father/bother).  There isn't much that
+can be done about this except extending the Shavian wiki further.
+In addition, in some cases it does not use the letters ARRAY and
+ADO in unstressed syllables as they should be; this could and should be
+fixed.
+
+It would be useful on initialisation to read a text file
+in a standard location, which gave a local mapping overriding the
+database for given words.
+
+It would be helpful if there was a callback for any words found
+from the CMUDict data rather than from the Shavian Wiki data, so that
+the wiki could be updated.
+
+The HTML transliterator should mark its output as being
+encoded in UTF-8, whatever the source encoding.  (Shavian cannot
+be represented in any other standard encoding.)
+
+The HTML transliterator should have an option which put a span
+around each word whose title was the word's spelling in the
+conventional alphabet, in the manner of translate.google.com.
+
+The HTML transliterator should have an option to rewrite the
+destinations of links, and to add a target to them, so that
+it can be used by a web script to link back to itself.
+
+The HTML transliterator should add a "generator" META tag
+referencing itself, if one is not already present.
+
+The HTML transliterator should ignore sections marked as
+being written in non-English languages.
+
+The HTML transliterator should have an option to
+allow loading documents in chunks, as C<HTML::Parser> already does.
+
+Most of these will be implemented before this module reaches
+version 1.00.
 
 =head1 FONTS
 
@@ -181,6 +385,11 @@ The transliteration data is available under various free licences,
 which are reproduced below.
 
 =head1 LICENCES
+
+=head2 Androcles and the Lion
+
+Part of the transliteration data was taken from the 1962 Shavian alphabet
+edition of "Androcles and the Lion"; this data is in the public domain.
 
 =head2 Shavian Wiki
 
