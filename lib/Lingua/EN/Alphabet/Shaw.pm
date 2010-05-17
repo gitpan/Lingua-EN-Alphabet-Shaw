@@ -8,7 +8,7 @@ use Encode;
 use File::ShareDir qw(dist_file);
 use HTML::Parser;
 
-our $VERSION = 0.60;
+our $VERSION = 0.62;
 
 sub new {
     my ($class) = @_;
@@ -30,7 +30,17 @@ sub unknown_handler {
     return $self->{unknown};
 }
 
-sub transliterate {
+my %_source_to_bank = (
+    0 => 'W', # Shavian wiki
+    1 => 'C', # CMUDict
+    2 => 'A', # Androcles and the Lion
+    );
+
+use Data::Dumper;
+sub transliterate_details {
+
+    my @result;
+
     my ($self, @texts) = @_;
 
     unless (defined $self->{dbh}) {
@@ -41,7 +51,7 @@ sub transliterate {
 	$filename = dist_file('Lingua-EN-Alphabet-Shaw', 'shavian-set.sqlite') unless -e $filename;
 
 	$self->{dbh} = DBI->connect("dbi:SQLite:dbname=$filename","","");
-	$self->{sth} = $self->{dbh}->prepare('select shaw, pos, dab from words where latn=?');
+	$self->{sth} = $self->{dbh}->prepare('select shaw, pos, dab, source from words where latn=?');
     }
 
     my $prevpos = 'n'; # sensible default
@@ -51,7 +61,11 @@ sub transliterate {
 
 	$self->{sth}->execute(lc $word);
 	my $homonyms = $self->{sth}->fetchall_arrayref();
-	return $self->{'unknown'}->($word, $word) unless @$homonyms;
+	return {
+	    bank => 'U',
+	    src => $word,
+	    text => $self->{'unknown'}->($word, $word),
+	    } unless @$homonyms;
 	my $candidate = $homonyms->[0];
 	for (@$homonyms) {
 	    $candidate = $_ if $_->[2] =~ $prevpos;
@@ -60,20 +74,53 @@ sub transliterate {
 	}
 
 	$prevpos = $candidate->[1];
-	return decode_utf8($candidate->[0]);
+
+	my $result = {
+	    bank => $_source_to_bank{$candidate->[3]} || '?',
+	    src => $word,
+	    text => decode_utf8($candidate->[0]),
+	};
+
+	$result->{'dab'}=1 if scalar(@$homonyms)>1;
+
+	return $result;
     };
 
-    my $result = '';
+    my $store_literal = sub {
+	my ($literal) = @_;
+	return if $literal eq '';
+
+	if (@result && $result[-1]->{'bank'} eq 'L') {
+	    $result[-1]->{'text'} .= $literal;
+	} else {
+	    push @result, { bank=>'L', text=>$literal };
+	}
+    };
 
     while (@texts) {
 	my $text = shift @texts;
-	$text =~ s/(?<!%)(?<!\\)\b([a-z]|[a-z][a-z']*[a-z])\b/$lookup_word->($1)/ieg;
-	$result .= $text;
 
-	$result .= shift @texts if @texts;
+	my @splittext = split(m/(?<!%)(?<!\\)\b([a-z]|[a-z][a-z']*[a-z])\b/i, $text);
+
+	while (@splittext) {
+	    $store_literal->(shift @splittext);
+
+	    push @result, $lookup_word->(shift @splittext) if @splittext;
+	}
+
+	$store_literal->(shift @texts) if @texts;
     }
 
-    return $result;
+    #print Dumper(\@result);
+
+    return @result if wantarray;
+    return [@result];
+}
+
+sub transliterate {
+    my ($self, @texts) = @_;
+
+    return join('', map { $_->{'text'} } $self->transliterate_details(@texts) );
 }
 
 sub mapping {
@@ -132,13 +179,16 @@ sub normalise {
 }
 
 sub transliterate_html {
-    my ($self, $html) = @_;
+    my ($self, $html, %flags) = @_;
 
     my @content;
     my $result;
 
     my %toplevel_tags = map {$_=>1} qw(p div h1 h2 h3 h4 h5 h6 ul ol li dt dd dl title);
     my %text_attrs = map {$_=>1} qw(alt title);
+
+    my $generator_seen = 0;
+    my $generator_name = ref($self);
 
     my $output = sub {
 	my ($repr, $tag) = @_;
@@ -154,7 +204,24 @@ sub transliterate_html {
 		}
 		$ordered[-1] .= $_;
 	    }
-	    $result .= $self->transliterate(@ordered);
+	    if ($flags{'titles'}) {
+		# FIXME we should also include class="dab" if they ask for it
+		my $entity = 0;
+		for my $detail ($self->transliterate_details(@ordered)) {
+		    if (defined $detail->{'src'} && !$entity) {
+			$result .= '<span title="' .
+			    $detail->{'src'} .
+			    '">' .
+			    $detail->{'text'} .
+			    '</span>';
+		    } else {
+			$result .= $detail->{'text'};
+			$entity = ($detail->{'text'} =~ /&$/);
+		    }
+		}
+	    } else {
+		$result .= $self->transliterate(@ordered);
+	    }
 	    @content = ();
 	    $result .= $repr;
 	} else {
@@ -181,11 +248,23 @@ sub transliterate_html {
 				       $repr .= '/' if $attrs->{'/'};
 				       $repr .= '>';
 
+				       if ($tag eq 'meta' &&
+					   lc($attrs->{'name'}) eq 'generator' &&
+					   lc($attrs->{'content'}) eq lc($generator_name)) {
+					   
+					   $generator_seen = 1;
+				       }
+
 				       $output->($repr, $tag);
 					     }, 'tagname, attr'],
 				   end => [sub {
 				       my ($tag) = @_;
 				       my $repr .= "</$tag>";
+
+				       if ($tag eq 'head' && !$generator_seen) {
+					   $output->("<meta name=\"generator\" content=\"$generator_name\" />",
+						     $tag);
+				       }
 
 				       $output->($repr, $tag);
 					   }, 'tagname'],
@@ -363,6 +442,9 @@ being written in non-English languages.
 
 The HTML transliterator should have an option to
 allow loading documents in chunks, as C<HTML::Parser> already does.
+
+The mapping() method should have an extra parameter to
+cause it to map in one direction only.
 
 Most of these will be implemented before this module reaches
 version 1.00.

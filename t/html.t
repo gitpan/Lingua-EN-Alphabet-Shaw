@@ -77,7 +77,7 @@ alt="This should be translated."/> Here is
 <a href="http://example.com">a link</a>.  This is
 all the text.</div></body></html>
 #
-<html><head><title>𐑞𐑦𐑕 𐑦𐑟 𐑩 𐑑𐑧𐑕𐑑</title></head>
+<html><head><title>𐑞𐑦𐑕 𐑦𐑟 𐑩 𐑑𐑧𐑕𐑑</title><meta name="generator" content="Lingua::EN::Alphabet::Shaw" /></head>
 <body>
 <h1>𐑞𐑦𐑕 𐑦𐑟 𐑩 𐑑𐑧𐑕𐑑</h1>
 <!-- This is a comment. -->
