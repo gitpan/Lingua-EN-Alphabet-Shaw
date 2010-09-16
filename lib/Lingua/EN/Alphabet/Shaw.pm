@@ -36,7 +36,6 @@ my %_source_to_bank = (
     2 => 'A', # Androcles and the Lion
     );
 
-use Data::Dumper;
 sub transliterate_details {
 
     my @result;
@@ -110,8 +109,6 @@ sub transliterate_details {
 
 	$store_literal->(shift @texts) if @texts;
     }
-
-    #print Dumper(\@result);
 
     return @result if wantarray;
     return [@result];

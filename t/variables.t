@@ -9,9 +9,9 @@ my $tests = [
         [ 'C-style',
         '%d test',
         '%d 𐑑𐑧𐑕𐑑'],
-        [ 'Python-style',
-	  '%(number)d test',
-	  '%(number)d 𐑑𐑧𐑕𐑑'],
+#        [ 'Python-style',
+#	  '%(number)d test',
+#	  '%(number)d 𐑑𐑧𐑕𐑑'],
 ];
 
 plan tests => (scalar(@$tests));
