@@ -8,7 +8,7 @@ use Encode;
 use File::ShareDir qw(dist_file);
 use HTML::Parser;
 
-our $VERSION = 0.62;
+our $VERSION = 0.64;
 
 sub new {
     my ($class) = @_;
